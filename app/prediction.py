@@ -1,3 +1,4 @@
+import os
 import pickle
 import numpy as np
 from fastapi import HTTPException
@@ -9,11 +10,14 @@ class PredictionInput(BaseModel):
     features: list[float]
 
 def load_models():
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    base_dir = os.path.dirname(current_dir)
     model_configs = {
-        "diabetes": '../models/lgb_model_diabetes.pkl',
-        "typhoid": '../models/lgb_model_typhoid.pkl' 
+        "diabetes": os.path.join(base_dir, 'models', 'lgb_model_diabetes.pkl'),
+        "typhoid": os.path.join(base_dir, 'models', 'lgb_model_typhoid.pkl')
     }
-    
+    # -------------------------------------------------------------
+
     for model_name, path in model_configs.items():
         try:
             with open(path, 'rb') as file:
