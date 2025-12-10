@@ -1,8 +1,31 @@
 import os
 import pickle
 import numpy as np
-from fastapi import HTTPException
 from pydantic import BaseModel
+from fastapi import HTTPException
+
+# --- Configuration ---
+REQUIRED_NUM_FEATURES = 5
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+MODEL_CONFIGS = {
+    "alert": {
+        "path": os.path.join(BASE_DIR, 'models', 'model_alert_xgb.pkl'),
+        "threshold": 0.690
+    },
+    "cardiovascular": {
+        "path": os.path.join(BASE_DIR, 'models', 'model_side_cardiovascular_diseases_xgb.pkl'),
+        "threshold": 0.590
+    },
+    "gastrointestinal_liver": {
+        "path": os.path.join(BASE_DIR, 'models', 'model_side_gastrointestinal_liver_diseases_xgb.pkl'),
+        "threshold": 0.940
+    },
+    "infectious": {
+        "path": os.path.join(BASE_DIR, 'models', 'model_side_infectious_diseases_xgb.pkl'),
+        "threshold": 0.890
+    }
+}
 
 ml_models = {}
 
@@ -10,60 +33,71 @@ class PredictionInput(BaseModel):
     features: list[float]
 
 def load_models():
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    base_dir = os.path.dirname(current_dir)
-    model_configs = {
-        "diabetes": os.path.join(base_dir, 'models', 'lgb_model_diabetes.pkl'),
-        "typhoid": os.path.join(base_dir, 'models', 'lgb_model_typhoid.pkl')
-    }
-    # -------------------------------------------------------------
-
-    for model_name, path in model_configs.items():
+    for name, config in MODEL_CONFIGS.items():
+        path = config["path"]
         try:
             with open(path, 'rb') as file:
-                ml_models[model_name] = pickle.load(file)
-            print(f"Model '{model_name}' loaded successfully from {path}")
-        except FileNotFoundError:
-            print(f"Error: Model file for '{model_name}' not found at {path}")
-            ml_models[model_name] = None
+                ml_models[name] = pickle.load(file)
+            print(f"[{name}] Loaded successfully from {path}")
         except Exception as e:
-            print(f"Error loading model '{model_name}': {e}")
-            ml_models[model_name] = None
+            print(f"[{name}] Error loading: {e}")
+            ml_models[name] = None
 
 def clear_models():
     ml_models.clear()
 
-def process_prediction(data: PredictionInput, model_name: str, required_features: int, threshold: float):
+def _process_single_prediction(features: list[float], model_name: str, threshold: float):
     
     model = ml_models.get(model_name)
     
     if not model:
-        raise HTTPException(status_code=500, detail=f"Model '{model_name}' is not loaded.")
+        return {
+            "prediction_class": -1,
+            "prediction_label": "Error: Model Not Loaded",
+            "probability_positive": 0.0,
+            "threshold_used": threshold,
+            "is_above_threshold": False
+        }
 
     try:
-        input_array = np.array(data.features).reshape(1, -1)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Error processing input: {str(e)}")
+        input_array = np.array(features).reshape(1, -1)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid feature format")
 
-    if input_array.shape[1] != required_features:
+    if input_array.shape[1] != REQUIRED_NUM_FEATURES:
           raise HTTPException(
               status_code=400, 
-              detail=f"Model '{model_name}' expects {required_features} features, got {input_array.shape[1]}"
+              detail=f"Model expects {REQUIRED_NUM_FEATURES} features, got {input_array.shape[1]}"
           )
 
-    try:
-        probs = model.predict_proba(input_array)
-        prob_positive = probs[0][1] 
-    except AttributeError:
-        raise HTTPException(status_code=500, detail="Loaded model does not support probability prediction.")
-
+    # Predict
+    probs = model.predict_proba(input_array)
+    prob_positive = float(probs[0][1])
+    
     prediction = 1 if prob_positive >= threshold else 0
-    label = f"Positive" if prediction == 1 else f"Negative"
+    label = "Positive" if prediction == 1 else "Negative"
 
     return {
         "prediction_class": prediction,
         "prediction_label": label,
-        "probability_positive": float(prob_positive),
+        "probability_positive": prob_positive,
         "threshold_used": threshold,
-        "is_above_threshold": bool(prob_positive >= threshold)
+        "is_above_threshold": prediction == 1
+    }
+
+def predict_all_diseases(data: PredictionInput):
+    
+    results = {}
+    
+    for name, config in MODEL_CONFIGS.items():
+        results[name] = _process_single_prediction(
+            features=data.features, 
+            model_name=name, 
+            threshold=config["threshold"]
+        )
+        
+    return {
+        "status": "success",
+        "input_features_count": len(data.features),
+        "results": results
     }
